@@ -173,18 +173,25 @@ End Function
 '        -3 正忙/参数问题
 '-------------------------------------------------------------
 Public Function MTChapSync_Sync(ByVal doc As Document, ByVal silent As Boolean) As Long
-    Dim idx() As Long
-    Dim num() As Long
-    Dim cnt As Long
+    Dim aIdx() As Long
+    Dim aNum() As Long
+    Dim aKind() As Long          ' 1 = 章(MTChap)  2 = 节(MTSec)
+    Dim aCnt As Long
+    Dim cCnt As Long
+    Dim chapActual As String
+    Dim secActual As String
+    Dim chapDesired As String
+    Dim secDesired As String
     Dim p As Paragraph
     Dim f As Field
     Dim i As Long
+    Dim lvl As Long
     Dim needSec As Boolean
     Dim hasMT As Boolean
-    Dim anchors As String
-    Dim desired As String
     Dim valsOk As Boolean
-    Dim cur As Long
+    Dim curC As Long
+    Dim curS As Long
+    Dim secInChap As Long
     Dim code As String
 
     On Error GoTo Failed
@@ -198,39 +205,28 @@ Public Function MTChapSync_Sync(ByVal doc As Document, ByVal silent As Boolean) 
     m_Busy = True
     MTChapSync_Sync = -1
 
-    ' --- 1) 章标题: 先看大纲级别(便宜), 只有 1 级标题才去取编号(昂贵) ---
-    For Each p In doc.Paragraphs
-        If p.Range.ParagraphFormat.OutlineLevel = wdOutlineLevel1 Then
-            If Len(Trim$(p.Range.ListFormat.ListString)) > 0 Then
-                cnt = cnt + 1
-                ReDim Preserve idx(1 To cnt)
-                ReDim Preserve num(1 To cnt)
-                idx(cnt) = p.Range.End
-                num(cnt) = ChapterNumber(p, cnt)
-                desired = desired & CStr(num(cnt)) & ","
-            End If
-        End If
-    Next p
-
-    If cnt = 0 Then
-        MTChapSync_Sync = -2
-        GoTo Done
-    End If
-
-    ' --- 2) 一次扫描域: 锚点序列 / 显示值是否落后 / 有无 MT / 是否用 MTSec ---
-    cur = 0
+    ' --- 1) 扫域: 现有锚点序列 / 显示值是否落后 / 有无 MT 编号 / 是否用节号 ---
+    curC = 0
+    curS = 0
     valsOk = True
     For Each f In doc.Fields
         code = f.Code.Text
         If InStr(1, code, "MTPlaceRef", vbTextCompare) > 0 Then hasMT = True
         If InStr(1, code, "MTSec", vbTextCompare) > 0 Then needSec = True
-        If InStr(1, code, "MTChap", vbTextCompare) > 0 Then
-            If InStr(1, code, "MACROBUTTON", vbTextCompare) = 0 Then
+        If InStr(1, code, "MACROBUTTON", vbTextCompare) = 0 Then
+            If InStr(1, code, "MTChap", vbTextCompare) > 0 Then
                 If InStr(1, code, "\r", vbTextCompare) > 0 Then
-                    cur = AnchorNumber(code)
-                    anchors = anchors & CStr(cur) & ","
+                    curC = AnchorNumber(code)
+                    chapActual = chapActual & CStr(curC) & ","
                 ElseIf InStr(1, code, "\c", vbTextCompare) > 0 Then
-                    If f.Result.Text <> CStr(cur) Then valsOk = False
+                    If f.Result.Text <> CStr(curC) Then valsOk = False
+                End If
+            ElseIf InStr(1, code, "MTSec", vbTextCompare) > 0 Then
+                If InStr(1, code, "\r", vbTextCompare) > 0 Then
+                    curS = AnchorNumber(code)
+                    secActual = secActual & CStr(curS) & ","
+                ElseIf InStr(1, code, "\c", vbTextCompare) > 0 Then
+                    If f.Result.Text <> CStr(curS) Then valsOk = False
                 End If
             End If
         End If
@@ -238,30 +234,73 @@ Public Function MTChapSync_Sync(ByVal doc As Document, ByVal silent As Boolean) 
 
     If Not hasMT Then GoTo Done          ' 返回 -1
 
-    ' --- 3) 快路径: 结构和显示值都没变, 一个字节都不改 ---
-    If anchors = desired Then
-        If valsOk Then
-            MTChapSync_Sync = cnt
-            GoTo Done
+    ' --- 2) 标题: 一级=章, 二级=节(仅当文档用到节号时) ---
+    secInChap = 0
+    For Each p In doc.Paragraphs
+        lvl = p.Range.ParagraphFormat.OutlineLevel
+        If lvl = wdOutlineLevel1 Then
+            If Len(Trim$(p.Range.ListFormat.ListString)) > 0 Then
+                cCnt = cCnt + 1
+                secInChap = 0
+                aCnt = aCnt + 1
+                ReDim Preserve aIdx(1 To aCnt)
+                ReDim Preserve aNum(1 To aCnt)
+                ReDim Preserve aKind(1 To aCnt)
+                aIdx(aCnt) = p.Range.End
+                aNum(aCnt) = ChapterNumber(p, cCnt)
+                aKind(aCnt) = 1
+                chapDesired = chapDesired & CStr(aNum(aCnt)) & ","
+            End If
+        ElseIf lvl = wdOutlineLevel2 And needSec Then
+            If Len(Trim$(p.Range.ListFormat.ListString)) > 0 Then
+                secInChap = secInChap + 1
+                aCnt = aCnt + 1
+                ReDim Preserve aIdx(1 To aCnt)
+                ReDim Preserve aNum(1 To aCnt)
+                ReDim Preserve aKind(1 To aCnt)
+                aIdx(aCnt) = p.Range.End
+                aNum(aCnt) = SectionNumber(p, secInChap)
+                aKind(aCnt) = 2
+                secDesired = secDesired & CStr(aNum(aCnt)) & ","
+            End If
         End If
-        UpdateStaleChapterFields doc, True
-        g_LastChanged = True
-        MTChapSync_Sync = cnt
+    Next p
+
+    If cCnt = 0 Then
+        MTChapSync_Sync = -2
         GoTo Done
     End If
 
-    ' --- 4) 结构变了: 重建锚点 ---
-    RemoveAnchors doc, "MTChap"
-    If needSec Then RemoveAnchors doc, "MTSec"
+    ' --- 3) 快路径: 章、节锚点都对且显示值都对, 一个字节都不改 ---
+    If chapActual = chapDesired Then
+        If (Not needSec) Or (secActual = secDesired) Then
+            If valsOk Then
+                MTChapSync_Sync = cCnt
+                GoTo Done
+            End If
+            UpdateSeqFields doc, True
+            g_LastChanged = True
+            MTChapSync_Sync = cCnt
+            GoTo Done
+        End If
+    End If
 
-    For i = cnt To 1 Step -1
-        AddAnchor doc, idx(i), "MTChap", num(i)
+    ' --- 4) 结构变了: 重建章/节锚点 ---
+    RemoveAnchors doc, "MTChap"
+    RemoveAnchors doc, "MTSec"
+
+    For i = aCnt To 1 Step -1
+        If aKind(i) = 1 Then
+            AddAnchor doc, aIdx(i), "MTChap", aNum(i)
+        Else
+            AddAnchor doc, aIdx(i), "MTSec", aNum(i)
+        End If
     Next i
 
-    UpdateStaleChapterFields doc, False
+    UpdateSeqFields doc, False
     g_LastChanged = True
 
-    MTChapSync_Sync = cnt
+    MTChapSync_Sync = cCnt
 
 Done:
     m_Busy = False
@@ -296,22 +335,53 @@ Private Function AnchorNumber(ByVal code As String) As Long
 End Function
 
 '-------------------------------------------------------------
-' 内部: 刷新显示值; onlyStale=True 时只更新已经不对的
+' 内部: 取节号(标题形如 4.2 -> 2; 取不到则用本章内的序号)
 '-------------------------------------------------------------
-Private Sub UpdateStaleChapterFields(ByVal doc As Document, ByVal onlyStale As Boolean)
+Private Function SectionNumber(ByVal p As Paragraph, ByVal fallback As Long) As Long
+    Dim s As String
+    Dim parts() As String
+    Dim digits As String
+    Dim i As Long
+    Dim ch As String
+
+    On Error Resume Next
+    SectionNumber = fallback
+
+    s = Trim$(p.Range.ListFormat.ListString)
+    If Len(s) = 0 Then Exit Function
+    parts = Split(s, ".")
+    s = parts(UBound(parts))
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch >= "0" And ch <= "9" Then digits = digits & ch
+    Next i
+    If Len(digits) > 0 And Len(digits) <= 3 Then SectionNumber = CLng(digits)
+End Function
+
+'-------------------------------------------------------------
+' 内部: 刷新显示值(章 + 节); onlyStale=True 时只更新已经不对的
+'-------------------------------------------------------------
+Private Sub UpdateSeqFields(ByVal doc As Document, ByVal onlyStale As Boolean)
     Dim f As Field
     Dim code As String
-    Dim cur As Long
+    Dim curC As Long
+    Dim curS As Long
 
     On Error Resume Next
     For Each f In doc.Fields
         code = f.Code.Text
-        If InStr(1, code, "MTChap", vbTextCompare) > 0 Then
-            If InStr(1, code, "MACROBUTTON", vbTextCompare) = 0 Then
+        If InStr(1, code, "MACROBUTTON", vbTextCompare) = 0 Then
+            If InStr(1, code, "MTChap", vbTextCompare) > 0 Then
                 If InStr(1, code, "\r", vbTextCompare) > 0 Then
-                    cur = AnchorNumber(code)
+                    curC = AnchorNumber(code)
                 ElseIf InStr(1, code, "\c", vbTextCompare) > 0 Then
-                    If (Not onlyStale) Or (f.Result.Text <> CStr(cur)) Then f.Update
+                    If (Not onlyStale) Or (f.Result.Text <> CStr(curC)) Then f.Update
+                End If
+            ElseIf InStr(1, code, "MTSec", vbTextCompare) > 0 Then
+                If InStr(1, code, "\r", vbTextCompare) > 0 Then
+                    curS = AnchorNumber(code)
+                ElseIf InStr(1, code, "\c", vbTextCompare) > 0 Then
+                    If (Not onlyStale) Or (f.Result.Text <> CStr(curS)) Then f.Update
                 End If
             End If
         End If
