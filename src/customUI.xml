@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui">
+  <ribbon>
+    <tabs>
+      <tab idMso="TabReferences">
+        <group id="MTChapSyncGrp" label="公式编号">
+          <button id="MTChapSyncBtnSync"
+                  label="立即同步编号"
+                  size="normal"
+                  onAction="MTChapSync_OnRibbonSync"
+                  screentip="让公式编号里的章号跟随章标题编号"/>
+          <button id="MTChapSyncBtnOn"
+                  label="开启自动同步"
+                  size="normal"
+                  onAction="MTChapSync_AutoOn"
+                  screentip="保存和打印时自动同步公式编号"/>
+          <button id="MTChapSyncBtnOff"
+                  label="关闭自动同步"
+                  size="normal"
+                  onAction="MTChapSync_AutoOff"
+                  screentip="保存和打印时不再自动同步，需要时点「同步编号」"/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

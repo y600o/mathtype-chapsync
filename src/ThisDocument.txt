@@ -1,0 +1,3 @@
+Option Explicit
+
+' 模板本身的文档模块留空即可, 事件挂在 MTChapSyncEvents 类里
